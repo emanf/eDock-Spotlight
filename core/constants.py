@@ -1,20 +1,18 @@
-"""Constants for the Spotlight application."""
-
 APP_ID = "emanf.spotlight"
 DEFAULT_INDEXES_FILE = "default_indexes.json"
 USER_INDEXES_FILE = "indexes.json"
 
-# Query modes
+
 QUERY_MODE_NORMAL = "normal"
 QUERY_MODE_APPS = "apps"
 
-# Item kinds
+
 KIND_LOCAL = "local"
 KIND_SHORTCUT = "shortcut"
 KIND_EXECUTABLE = "executable"
 KIND_ONLINE = "online"
 
-# Status badges
+
 STATUS_INSTALLED = "installed"
 STATUS_INSTALL = "install"
 STATUS_ENABLE = "enable"
@@ -22,22 +20,30 @@ STATUS_DISABLE = "disable"
 STATUS_UPDATE = "update"
 STATUS_WIN = "win"
 
-# Search configuration
+
 SEARCH_DEBOUNCE_MS = 120
 FOCUS_HIDE_CLICK_BLOCK_SECONDS = 0.7
 
-# UI dimensions
+
 WINDOW_BASE_WIDTH = 620
 WINDOW_BASE_HEIGHT = 62
 INPUT_HEIGHT = 34
 RESULT_ROW_HEIGHT = 46
 
-# Search limits
+
+LOCAL_SEARCH_MAX_RESULTS = 20
+
+
+MIN_VISIBLE_ROWS = 5
+
+
+REGISTRY_CACHE_TTL = 3600
+
 DEFAULT_MAX_RESULTS = 30
 LOCAL_APPS_LIMIT = 10
 REGISTRY_RESULTS_LIMIT = 10
 
-# Scoring weights
+
 SCORE_EXACT_MATCH = 1000
 SCORE_STARTS_WITH = 800
 SCORE_CONTAINS = 500
@@ -48,7 +54,7 @@ SCORE_ABBREVIATION_EXACT = 1200
 SCORE_ABBREVIATION_STARTS = 900
 SCORE_ABBREVIATION_CONTAINS = 650
 
-# Source priorities
+
 PRIORITY_LOCAL = 4
 PRIORITY_SHORTCUT = 3
 PRIORITY_EXECUTABLE = 2

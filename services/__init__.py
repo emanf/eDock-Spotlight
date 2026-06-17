@@ -1,4 +1,3 @@
-"""Services package."""
 from .registry_service import RegistryService
 from .cache_service import CacheService
 from .installer_service import InstallerService

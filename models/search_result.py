@@ -1,14 +1,9 @@
-"""
-Data structure for a search result item shown in the UI.
-"""
 from dataclasses import dataclass, field
 from typing import Any, Optional, Dict
 
 
 @dataclass
 class SearchResult:
-    """Represents a single search result item."""
-    
     id: str
     title: str
     kind: str = "general"
@@ -18,17 +13,14 @@ class SearchResult:
     command: Optional[str] = None
     action: Optional[str] = None
     source: str = "local"
-    
-    # Additional metadata
+
     metadata: Dict[str, Any] = field(default_factory=dict)
-    
-    # UI-specific properties (set by controller)
+
     _spotlight_status: Optional[str] = None
     _spotlight_actionable: bool = False
     _spotlight_action: Optional[str] = None
-    
+
     def to_dict(self) -> Dict[str, Any]:
-        """Convert to dictionary representation."""
         return {
             "id": self.id,
             "title": self.title,
@@ -44,16 +36,29 @@ class SearchResult:
             "_spotlight_actionable": self._spotlight_actionable,
             "_spotlight_action": self._spotlight_action,
         }
-    
+
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> "SearchResult":
-        """Create from dictionary representation."""
-        metadata = {k: v for k, v in data.items() 
-                   if k not in ("id", "title", "kind", "subtitle", "icon", 
-                               "path", "command", "action", "source",
-                               "_spotlight_status", "_spotlight_actionable", 
-                               "_spotlight_action")}
-        
+        metadata = {
+            k: v
+            for k, v in data.items()
+            if k
+            not in (
+                "id",
+                "title",
+                "kind",
+                "subtitle",
+                "icon",
+                "path",
+                "command",
+                "action",
+                "source",
+                "_spotlight_status",
+                "_spotlight_actionable",
+                "_spotlight_action",
+            )
+        }
+
         return cls(
             id=data.get("id", ""),
             title=data.get("title", ""),
