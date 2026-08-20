@@ -256,7 +256,11 @@ class Controller:
                 kind = str(res.kind or "").lower().strip()
                 if kind == KIND_LOCAL:
                     app_id = str(res.id or "").lower().strip()
-                    if enabled and app_id and app_id not in enabled:
+                    if (
+                        not app_id
+                        or app_id not in enabled
+                        or not self._is_app_installed(app_id)
+                    ):
                         continue
                 filtered.append(res)
             except Exception:
@@ -298,7 +302,37 @@ class Controller:
             return False
 
         enabled = self._get_enabled_app_ids()
-        return str(app_id).lower() in enabled
+        return (
+            str(app_id).lower() in enabled
+            and self._is_app_installed(app_id)
+        )
+
+    def _is_app_installed(self, app_id: str) -> bool:
+        """An app is installed only when its executable entry point exists."""
+        app_id = str(app_id or "").strip()
+        if not app_id:
+            return False
+
+        try:
+            apps_dir = self.local_apps_provider.apps_dir
+            if not apps_dir or not apps_dir.exists():
+                return False
+
+            direct = apps_dir / app_id / "app.py"
+            if direct.is_file():
+                return True
+
+            app_id_lower = app_id.casefold()
+            for app_dir in apps_dir.iterdir():
+                if (
+                    app_dir.is_dir()
+                    and app_dir.name.casefold() == app_id_lower
+                    and (app_dir / "app.py").is_file()
+                ):
+                    return True
+        except Exception:
+            pass
+        return False
 
     def _merge_apps_results(
         self, local_results: List[SearchResult], registry_results: List[SearchResult]
@@ -323,12 +357,33 @@ class Controller:
     def handle_result_action(self, result_dict: Dict):
         kind = str(result_dict.get("kind", "")).lower().strip()
         if kind == KIND_LOCAL:
-            if result_dict.get("_from_history"):
-                pass
-            else:
-                if self._search_mode == QUERY_MODE_APPS:
-                    self._show_app_info(result_dict)
+            is_history = bool(result_dict.get("_from_history"))
+            is_apps_mode = (
+                self._search_mode == QUERY_MODE_APPS and not is_history
+            )
+
+            if not is_apps_mode:
+                app_id = result_dict.get("app_id") or result_dict.get("id")
+                if not self._is_app_installed(app_id):
+                    if is_history:
+                        self._remove_history_item(result_dict)
+                    self._show_message(
+                        "App no longer installed",
+                        "This app is no longer installed. Its history entry was removed.",
+                        warning=True,
+                    )
                     return
+
+                if not self._is_app_enabled(app_id):
+                    self._show_message(
+                        "App is disabled",
+                        "Please enable this app before trying to run it.",
+                    )
+                    return
+            elif not is_history:
+                # App mode always opens the information/install dialog.
+                self._show_app_info(result_dict)
+                return
 
             app_loader = None
             runtime = None
@@ -396,15 +451,37 @@ class Controller:
         elif kind in ("executable", "shortcut"):
             self._launch_item(result_dict)
 
+    def _remove_history_item(self, result_dict: Dict):
+        try:
+            if self.window and hasattr(self.window, "remove_from_history"):
+                self.window.remove_from_history(result_dict)
+        except Exception:
+            pass
+
+    def _show_message(self, title: str, message: str, warning: bool = False):
+        try:
+            from core.ui.dialogs.message_dialog import MessageDialog
+
+            if self.window:
+                if warning:
+                    MessageDialog.warning(self.window, title, subtitle=message)
+                else:
+                    MessageDialog.info(self.window, title, subtitle=message)
+        except Exception:
+            pass
+
     def _show_app_info(self, app_data: Dict):
         from ..ui.dialogs import AppInfoDialog
 
         if not self.window:
             return
 
-        dialog = AppInfoDialog(app_data, self.window)
-        if dialog.exec():
-            print(f"Installing app: {app_data.get('id')}")
+        dialog = AppInfoDialog(app_data, parent=self.window)
+        dialog.exec()
+        # The dialog may install or enable an app while it is open.  Do not
+        # keep the controller's cached enabled-id set stale for the next
+        # Spotlight search.
+        self._enabled_app_ids = None
 
     def _launch_item(self, item_data: Dict):
         import subprocess
@@ -425,7 +502,7 @@ class Controller:
 
             if apps_dir and apps_dir.exists():
                 for app_dir in apps_dir.iterdir():
-                    if app_dir.is_dir():
+                    if app_dir.is_dir() and (app_dir / "app.py").is_file():
                         installed.add(app_dir.name.lower())
         except Exception:
             pass
@@ -437,55 +514,14 @@ class Controller:
         kind = str(result.kind or "").lower().strip()
 
         if mode == QUERY_MODE_APPS:
-            try:
-                if self._is_app_enabled(result.id):
-                    decorated["_spotlight_status"] = "enabled"
-                    decorated["_spotlight_actionable"] = True
-                    decorated["_spotlight_action"] = "showcase"
-                    return decorated
-            except Exception:
-                pass
-
-            if kind == KIND_LOCAL:
-                if self._is_app_enabled(result.id):
-                    decorated["_spotlight_status"] = "enabled"
-                else:
-                    decorated["_spotlight_status"] = "installed"
-                decorated["_spotlight_actionable"] = True
-                decorated["_spotlight_action"] = "showcase"
-            elif (
-                result.metadata.get("is_online")
-                or result.metadata.get("installed") is not None
-            ):
-                installed = bool(result.metadata.get("installed", False))
-
-                online_v = result.metadata.get("online_version")
-                local_v = result.metadata.get("local_version") or result.metadata.get(
-                    "version"
-                )
-
-                try:
-                    from packaging.version import Version
-
-                    if online_v and local_v:
-                        try:
-                            if Version(str(online_v)) > Version(str(local_v)):
-                                decorated["_spotlight_status"] = "update"
-                                decorated["_spotlight_actionable"] = True
-                                decorated["_spotlight_action"] = "update"
-                                return decorated
-                        except Exception:
-                            pass
-                except Exception:
-                    if online_v and local_v and str(online_v) != str(local_v):
-                        decorated["_spotlight_status"] = "update"
-                        decorated["_spotlight_actionable"] = True
-                        decorated["_spotlight_action"] = "update"
-                        return decorated
-
-                decorated["_spotlight_status"] = "installed" if installed else "install"
-                decorated["_spotlight_actionable"] = not installed
-                decorated["_spotlight_action"] = "install"
+            installed = self._is_app_installed(result.id)
+            enabled = installed and self._is_app_enabled(result.id)
+            decorated["_spotlight_status"] = (
+                "enabled" if enabled else "installed" if installed else "install"
+            )
+            decorated["_spotlight_actionable"] = True
+            # App mode always opens the information/installation dialog.
+            decorated["_spotlight_action"] = "showcase"
         else:
             if kind == KIND_LOCAL:
                 if self._is_app_enabled(result.id):

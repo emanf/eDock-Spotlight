@@ -168,6 +168,13 @@ class SpotlightWindow(QWidget):
                 padding: 0px 4px;
                 selection-background-color: {selected_bg};
             }}
+
+            QLabel#searchTip {{
+                background: transparent;
+                color: {text};
+                font-size: 19px;
+                padding: 0px 4px;
+            }}
             
             QListView#searchListView {{
                 background: transparent;
@@ -244,6 +251,12 @@ class SpotlightWindow(QWidget):
     def _on_query_changed(self, text: str):
 
         self.search_timer.stop()
+        # Entering the apps-mode prefix by itself should immediately populate
+        # the app catalog instead of waiting for another keystroke.
+        if str(text or "").strip() == ">":
+            if self.controller:
+                self.controller.search("", QUERY_MODE_APPS)
+            return
         self.search_timer.start()
 
     def _on_search_timeout(self):
@@ -505,6 +518,29 @@ class SpotlightWindow(QWidget):
 
         clean.sort(key=lambda item: float(item.get("last_opened", 0)), reverse=True)
         return clean
+
+    def remove_from_history(self, item):
+        key = self.history_item_key(item or {})
+        if not key:
+            return
+
+        history = self.read_history()
+        filtered = [
+            old_item
+            for old_item in history
+            if self.history_item_key(old_item) != key
+        ]
+        self.write_history(filtered)
+
+        self.current_results = [
+            old_item
+            for old_item in self.current_results
+            if self.history_item_key(
+                old_item.to_dict() if isinstance(old_item, SearchResult) else old_item
+            )
+            != key
+        ]
+        self.refresh_list()
 
     def write_history(self, history):
         try:

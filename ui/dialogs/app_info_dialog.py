@@ -1,7 +1,7 @@
 import json
 from pathlib import Path
 
-from PySide6.QtCore import Qt, QTimer, QUrl
+from PySide6.QtCore import Qt, QTimer, QUrl, QObject, QThread, Signal, Slot
 from PySide6.QtNetwork import QNetworkAccessManager, QNetworkRequest
 from PySide6.QtWidgets import (
     QDialog,
@@ -14,24 +14,66 @@ from PySide6.QtWidgets import (
     QWidget,
     QGridLayout,
     QSizePolicy,
+    QProgressBar,
 )
 
 from core.theming.theme_manager import Theme
 from core.rendering.material_icons import MaterialIcons
+from core.ui.dialogs.message_dialog import MessageDialog
 from PySide6.QtGui import QFont
 
 
+class _InstallerWorker(QObject):
+    progress = Signal(int, int)
+    finished = Signal(bool, str)
+
+    def __init__(self, app_id, download_url, expected_sha256=None):
+        super().__init__()
+        self.app_id = app_id
+        self.download_url = download_url
+        self.expected_sha256 = expected_sha256
+
+    @Slot()
+    def run(self):
+        try:
+            from ...services.installer_service import InstallerService
+
+            installer = InstallerService()
+            installed = installer.install(
+                self.app_id,
+                self.download_url,
+                expected_sha256=self.expected_sha256,
+                progress_callback=lambda done, total: self.progress.emit(done, total),
+            )
+            self.finished.emit(
+                bool(installed),
+                installer.last_message
+                or (
+                    ""
+                    if installed
+                    else "The archive could not be downloaded or installed."
+                ),
+            )
+        except Exception as exc:
+            self.finished.emit(False, str(exc))
+
+
 class AppInfoDialog(QDialog):
+    ACTION_BUTTON_HEIGHT = 36
+
     def __init__(self, app_data: dict, parent=None):
         super().__init__(parent)
 
         self.app_data = dict(app_data or {})
         self.manifest_data = {}
+        self._install_thread = None
+        self._install_worker = None
 
         MaterialIcons.ensure_font()
 
         self.setWindowTitle("App Information")
         self.setModal(True)
+        self.setWindowModality(Qt.WindowModal)
         self.setMinimumWidth(560)
         self.setMinimumHeight(440)
         self.setWindowFlags(Qt.Dialog | Qt.FramelessWindowHint)
@@ -150,6 +192,20 @@ class AppInfoDialog(QDialog):
         except Exception:
             pass
 
+        self.install_status_label = QLabel("", self)
+        self.install_status_label.setObjectName("installStatus")
+        self.install_status_label.setVisible(False)
+        layout.addWidget(self.install_status_label)
+
+        self.progress_bar = QProgressBar(self)
+        self.progress_bar.setObjectName("installProgress")
+        self.progress_bar.setRange(0, 100)
+        self.progress_bar.setValue(0)
+        self.progress_bar.setTextVisible(False)
+        self.progress_bar.setFixedHeight(8)
+        self.progress_bar.setVisible(False)
+        layout.addWidget(self.progress_bar)
+
         layout.addStretch(1)
         buttons_layout = QHBoxLayout()
         buttons_layout.setSpacing(10)
@@ -161,15 +217,13 @@ class AppInfoDialog(QDialog):
         self.close_info_button.clicked.connect(self.reject)
 
         self.toggle_button = QPushButton("Enable", self)
-        self.toggle_button.setObjectName("actionButton")
+        self.toggle_button.setObjectName("toggleButton")
         self.toggle_button.clicked.connect(self._on_toggle_clicked)
         self.toggle_button.setVisible(False)
-        self.toggle_button.setMinimumHeight(32)
 
         self.action_button = QPushButton("Install", self)
-        self.action_button.setObjectName("actionButton")
+        self.action_button.setObjectName("installButton")
         self.action_button.clicked.connect(self._on_action_clicked)
-        self.action_button.setMinimumHeight(32)
 
         try:
             self.action_button.setEnabled(True)
@@ -269,6 +323,13 @@ class AppInfoDialog(QDialog):
         def _safe(val, fallback):
             return val if val else fallback
 
+        info_button = Theme.get_button(Theme.BUTTON_INFO)
+        info_background = _safe(uic(info_button.get(Theme.Components.Button.BACKGROUND_COLOR)), "#2563eb")
+        info_hover = _safe(uic(info_button.get(Theme.Components.Button.HOVER_COLOR)), "#3b82f6")
+        info_pressed = _safe(uic(info_button.get(Theme.Components.Button.PRESSED_COLOR)), "#1d4ed8")
+        info_border = _safe(uic(info_button.get(Theme.Components.Button.BORDER_COLOR)), info_background)
+        info_text = _safe(uic(info_button.get(Theme.Components.Button.TEXT_COLOR)), "#ffffff")
+
         container_background = _safe(container_background, "#2b2b2b")
         container_border = _safe(container_border, "#3c3c3c")
         title_color = _safe(title_color, "#ffffff")
@@ -357,8 +418,8 @@ class AppInfoDialog(QDialog):
                 border: 1px solid {container_border};
                 padding: 6px 12px;
                 border-radius: 8px;
-                min-height: 32px;
-                font-size: 13px;
+                font-size: 14px;
+                height: 24px;
             }}
 
             QPushButton#closeInfoButton:hover {{
@@ -369,32 +430,55 @@ class AppInfoDialog(QDialog):
                 background-color: {close_pressed};
             }}
 
-            QPushButton#actionButton {{
-                background-color: {normal_button_background};
-                color: {normal_button_text};
-                border: 1px solid {normal_button_border};
-                padding: 8px;
+            QPushButton#installButton {{
+                background-color: {info_background};
+                color: {info_text};
+                border: 1px solid {info_border};
+                padding: 6px 12px;
                 border-radius: 8px;
-                font-size: 13px;
+                font-size: 14px;
+                height: 24px;
             }}
 
-            QPushButton#actionButton:hover {{
-                background-color: {normal_button_hover};
+            QPushButton#installButton:hover {{
+                background-color: {info_hover};
             }}
 
-            QPushButton#actionButton:pressed {{
-                background-color: {normal_button_pressed};
+            QPushButton#installButton:pressed {{
+                background-color: {info_pressed};
             }}
+            
+            QPushButton#toggleButton {{
+                            padding: 6px 12px;
+                            border-radius: 8px;
+                            font-size: 14px;
+                        }}
 
-            QPushButton#actionButton:disabled {{
+            QPushButton#installButton:disabled, QPushButton#toggleButton:disabled {{
                 background-color: transparent;
                 color: {field_label_color};
                 border: 1px solid {container_border};
             }}
 
+            QLabel#installStatus {{
+                color: {description_color};
+                font-size: 12px;
+            }}
+
+            QProgressBar#installProgress {{
+                background-color: {container_border};
+                border: none;
+                border-radius: 4px;
+            }}
+
+            QProgressBar#installProgress::chunk {{
+                background-color: {info_background};
+                border-radius: 4px;
+            }}
+
             QCheckBox#enabledCheck {{
                 color: {field_value_color};
-                font-size: 13px;
+                font-size: 14px;
             }}
 
             /* reserve stable indicator space and spacing so text doesn't shift */
@@ -506,6 +590,9 @@ class AppInfoDialog(QDialog):
             QTimer.singleShot(0, lambda: self._on_manifest_loaded({}))
 
     def closeEvent(self, event):
+        if self._install_thread is not None and self._install_thread.isRunning():
+            event.ignore()
+            return
         try:
             super().closeEvent(event)
         except Exception:
@@ -517,9 +604,123 @@ class AppInfoDialog(QDialog):
                 return
             if not self.action_button.isEnabled():
                 return
-            self.accept()
+            merged = self._get_merged_data()
+            if self._is_installed(merged):
+                return
+
+            app_id = self._get_app_id(merged)
+            download_url = self._get_download_url(merged)
+            if not app_id or not download_url:
+                MessageDialog.warning(
+                    self,
+                    "Unable to install",
+                    subtitle="This package does not provide a valid download URL.",
+                )
+                return
+
+            self._start_install(app_id, download_url, self._get_sha256(merged))
         except Exception:
             return
+
+    def _start_install(self, app_id: str, download_url: str, sha256: str = None):
+        self.action_button.setEnabled(False)
+        self.toggle_button.setEnabled(False)
+        self.close_info_button.setEnabled(False)
+        self.close_button.setEnabled(False)
+        self.action_button.setText("Installing…")
+        self.install_status_label.setText("Downloading installer…")
+        self.install_status_label.setVisible(True)
+        self.progress_bar.setRange(0, 100)
+        self.progress_bar.setValue(0)
+        self.progress_bar.setVisible(True)
+
+        self._install_thread = QThread(self)
+        self._install_worker = _InstallerWorker(app_id, download_url, sha256)
+        self._install_worker.moveToThread(self._install_thread)
+        self._install_thread.started.connect(self._install_worker.run)
+        self._install_worker.progress.connect(self._on_install_progress)
+        self._install_worker.finished.connect(self._on_install_finished)
+        self._install_worker.finished.connect(self._install_thread.quit)
+        self._install_thread.finished.connect(self._install_worker.deleteLater)
+        self._install_thread.finished.connect(self._install_thread.deleteLater)
+        self._install_thread.finished.connect(self._clear_install_thread)
+        self._install_thread.start()
+
+    @Slot(int, int)
+    def _on_install_progress(self, downloaded: int, total: int):
+        if total > 0:
+            percent = max(0, min(100, int(downloaded * 100 / total)))
+            self.progress_bar.setRange(0, 100)
+            self.progress_bar.setValue(percent)
+            self.install_status_label.setText(
+                f"Downloading installer… {percent}%"
+            )
+        else:
+            self.progress_bar.setRange(0, 0)
+            self.install_status_label.setText("Downloading installer…")
+
+    @Slot(bool, str)
+    def _on_install_finished(self, installed: bool, message: str):
+        if not installed:
+            self.action_button.setEnabled(True)
+            self._update_action_button(self._get_merged_data())
+            self.toggle_button.setEnabled(True)
+            self.close_info_button.setEnabled(True)
+            self.close_button.setEnabled(True)
+            self.install_status_label.setVisible(False)
+            self.progress_bar.setVisible(False)
+            MessageDialog.error(
+                self,
+                "Installation failed",
+                subtitle=message
+                or "The application could not be downloaded or installed.",
+            )
+            return
+
+        app_id = self._get_app_id(self._get_merged_data())
+        self._set_enabled(app_id, False)
+        self.app_data["installed"] = True
+        self.app_data["is_installed"] = True
+        metadata = self.app_data.setdefault("metadata", {})
+        if isinstance(metadata, dict):
+            metadata["installed"] = True
+        self.install_status_label.setText("Installation complete")
+        self.progress_bar.setRange(0, 100)
+        self.progress_bar.setValue(100)
+        self._update_action_button(self._get_merged_data())
+        self._update_toggle_button(self._get_merged_data())
+        self.close_info_button.setEnabled(True)
+        self.close_button.setEnabled(True)
+        MessageDialog.success(
+            self,
+            "Installation complete",
+            subtitle=(
+                f"{message or self._get_display_title() + ' was installed successfully.'}\n\n"
+                "You can enable it now."
+            ),
+        )
+
+    def _clear_install_thread(self):
+        self._install_thread = None
+        self._install_worker = None
+
+    def _get_download_url(self, merged: dict) -> str:
+        return str(
+            merged.get("download_url")
+            or merged.get("download")
+            or merged.get("install_url")
+            or self.app_data.get("download_url")
+            or self.app_data.get("download")
+            or ""
+        ).strip()
+
+    def _get_sha256(self, merged: dict) -> str:
+        return str(
+            merged.get("sha256")
+            or merged.get("checksum")
+            or self.app_data.get("sha256")
+            or ""
+        ).strip() or None
 
     def _get_app_id(self, merged: dict) -> str:
         app_id = str(
@@ -616,8 +817,17 @@ class AppInfoDialog(QDialog):
 
         try:
             enabled = self._get_enabled(merged)
-            self._set_enabled(app_id, not enabled)
+            new_enabled = not enabled
+            self._set_enabled(app_id, new_enabled)
             self._update_toggle_button(merged)
+            MessageDialog.info(
+                self,
+                "Restart required",
+                subtitle=(
+                    "The setting was saved. Please restart eDock for this change "
+                    "to take effect."
+                ),
+            )
         except Exception:
             pass
 
@@ -634,9 +844,43 @@ class AppInfoDialog(QDialog):
             enabled = self._get_enabled(merged)
             self.toggle_button.setText("Disable" if enabled else "Enable")
             self.toggle_button.setEnabled(True)
-            self.toggle_button.setStyleSheet("")
+            self._apply_button_variant_style(
+                self.toggle_button,
+                Theme.BUTTON_NEGATIVE if enabled else Theme.BUTTON_POSITIVE,
+            )
         except Exception:
             pass
+
+    def _apply_button_variant_style(self, button, variant: str):
+        try:
+            uic = Theme.to_ui_color
+            theme = Theme.get_button(variant)
+            background = uic(theme.get(Theme.Components.Button.BACKGROUND_COLOR))
+            hover = uic(theme.get(Theme.Components.Button.HOVER_COLOR))
+            pressed = uic(theme.get(Theme.Components.Button.PRESSED_COLOR))
+            border = uic(theme.get(Theme.Components.Button.BORDER_COLOR))
+            text = uic(theme.get(Theme.Components.Button.TEXT_COLOR))
+            button.setStyleSheet(
+                f"""
+                QPushButton {{
+                    background-color: {background};
+                    color: {text};
+                    border: 1px solid {border};
+                    padding: 8px;
+                    border-radius: 8px;
+                    font-size: 13px;
+                }}
+                QPushButton:hover {{ background-color: {hover}; }}
+                QPushButton:pressed {{ background-color: {pressed}; }}
+                QPushButton:disabled {{
+                    background-color: transparent;
+                    color: {uic(Theme.get_text(Theme.TEXT_MUTED).get(Theme.Components.Text.COLOR))};
+                    border: 1px solid {uic(Theme.get_dialog().get(Theme.Components.Dialog.BORDER_COLOR))};
+                }}
+                """
+            )
+        except Exception:
+            button.setStyleSheet("")
 
     def _on_manifest_failed(self, message: str):
         if message:

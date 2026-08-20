@@ -115,7 +115,7 @@ class AppsSearchWorker(QObject):
                 for app_dir in apps_dir.iterdir():
                     if self.is_cancelled():
                         return set()
-                    if app_dir.is_dir():
+                    if app_dir.is_dir() and (app_dir / "app.py").is_file():
                         installed.add(app_dir.name.lower())
             return installed
         except Exception:
