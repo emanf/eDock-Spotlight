@@ -13,7 +13,7 @@
   "repository": "https://github.com/emanF/eDock-Spotlight",
   "category": "utility",
   "keywords": ["search", "launcher", "installer", "spotlight"],
-  "download": "https://github.com/eManF/eDock-Spotlight/releases/latest/download/app.zip",
+  "download": "https://github.com/emanf/eDock-Spotlight/releases/download/v0.2.5/emanf.spotlight-v0.2.5.zip",
   "manifest": "https://raw.githubusercontent.com/eManF/eDock-Spotlight/main/app.json",
   "changelog": "https://github.com/eManF/eDock-Spotlight/releases/changelog.md",
   "min_edock_version": "0.1.0",
